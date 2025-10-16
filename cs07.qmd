@@ -13,7 +13,10 @@ The data for this case study is sourced from the NOAA Earth System Research Labo
 ```{r load libraries and data}
 #| include: false
 #| warning: false
+library(quarto)
 library(tidyverse)
+library(ggtext)
+library(knitr)
 
 data_url <- "ftp://aftp.cmdl.noaa.gov/products/trends/co2/co2_annmean_mlo.txt"
 
@@ -21,17 +24,37 @@ co2 <- readr::read_table(data_url, comment = "#", col_names = c("year", "mean", 
 
 ```
 
-### Time Series of CO~2~ Levels
+### Time Series of CO~2~ Concentrations
+The following graph shows annual mean CO~2~ concentrations measured at Mauna Loa Observatory from 1959 through 2024. 
+
 
 ``` {r time series plot}
 #| echo: false
-#| 
-
+co2_time <- ggplot(data = co2, aes(x = year, y = mean)) +
+  geom_line(color = "darkslateblue", linewidth = 1.5) +
+  theme_bw() +
+  theme(axis.title.y = element_markdown(),
+        plot.title = element_markdown()) +
+  labs(x = "Year",
+       y = "CO<sub>2</sub> (ppm)",
+       title = "Annual Mean CO<sub>2</sub> Concentrations at Mauna Loa")
+co2_time
 ```
 
-### Summarized Data Table (rename)
+### Mean CO~2~ by Decade
+The following table shows mean CO~2~ concentrations by decade. Note that the decade beginning in 2020 only includes observations through 2024. 
+
 ``` {r table summary}
 #| echo: false
 
+co2_decade <- co2 |>
+  slice(-1) |>
+  mutate(decade = floor(year / 10) * 10) |>
+  group_by(decade) |>
+  summarize(mean(mean))
+
+kable(co2_decade, format = "html", col.names = c("Decade Start Year", "Mean CO<sub>2</sub> (ppm)"),
+      align = "c", digits = round(1), caption = "Mean CO<sub>2</sub> Concentrations by Decade",
+      escape = FALSE)
 ```
 
