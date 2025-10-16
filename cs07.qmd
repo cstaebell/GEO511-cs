@@ -5,33 +5,33 @@ format:
   gfm: default
   pptx: default
   docx: default
-editor: visual
 ---
 
-## Mauna Loa CO2 Data
+## Mauna Loa CO~2~ Data
+The data for this case study is sourced from the NOAA Earth System Research Laboratory’s Global Monitoring Laboratory. Mauna Loa Annual Mean CO~2~ data is available for download [here](ftp://aftp.cmdl.noaa.gov/products/trends/co2/co2_annmean_mlo.txt). 
 
-```{r}
-#| echo: FALSE
-#| 
+```{r load libraries and data}
+#| include: false
+#| warning: false
+library(tidyverse)
+
 data_url <- "ftp://aftp.cmdl.noaa.gov/products/trends/co2/co2_annmean_mlo.txt"
 
 co2 <- readr::read_table(data_url, comment = "#", col_names = c("year", "mean", "unc"))
 
 ```
 
-## Running Code
+### Time Series of CO~2~ Levels
 
-When you click the **Render** button a document will be generated that includes both content and the output of embedded code. You can embed code like this:
-
-```{r}
-1 + 1
-```
-
-You can add options to executable code like this
-
-```{r}
+``` {r time series plot}
 #| echo: false
-2 * 2
+#| 
+
 ```
 
-The `echo: false` option disables the printing of code (only output is displayed).
+### Summarized Data Table (rename)
+``` {r table summary}
+#| echo: false
+
+```
+
