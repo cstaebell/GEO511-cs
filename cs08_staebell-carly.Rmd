@@ -1,0 +1,92 @@
+---
+title: "cs08: Statistical Modeling and Reproducible Output"
+author: "Carly Staebell"
+date: "2025-10-23"
+format:
+  html: default
+---
+
+This case study uses non-spatial linear regression to model life expectancy as a function of GDP per capita using the `world` dataset.
+
+```{r setup}
+#| include: false
+
+# Load necessary libraries for data manipulation, spatial data, modeling, and reproducible examples
+library(tidyverse)
+library(sf)
+library(spData)
+library(knitr)
+library(reprex) # For creating reproducible examples
+library(broom) # For tidying model outputs
+
+data(world)
+```
+# 1. Estimate the Linear Model
+## 1.1 Data Preparation
+The `world` dataset was loaded. The GDP per capita variable (`gdpPercap`) was log-transformed and missing values (`NA`) were removed to facilitate the linear regression fit.
+
+```{r data-prep}
+#| include: false
+
+log_world_gdp <- world |>
+  select(name_long, lifeExp, gdpPercap, continent, geom) |>
+  mutate(log_gdp = log(gdpPercap)) |>
+  drop_na(lifeExp, log_gdp)
+```
+
+The head of the resulting data set is shown below.
+
+```{r log world data}
+#| echo: false
+
+knitr::kable(head(log_world_gdp))
+```
+
+## 1.2 Model Estimation and Summary
+A linear model was fit to the data to predict life expectancy based on log(GDP per capita). The model is summarized in the table below.
+
+```{r model estimation}
+#| echo: false
+
+lm_model <- lm(lifeExp ~ log_gdp, data = log_world_gdp)
+lm_model_output <- tidy(lm_model)
+knitr::kable(lm_model_output, caption = "Linear Regression Model Summary: Life Expectancy vs. Log GDP", digits = 2)
+```
+
+# 2. Visualize Model Predictions
+The linear model was used to generate life expectancy predictions. The predicted life expectancy and standard error are plotted along with the data colored by continent. There is a strong positive relationship between life expectancy and the logarithm of GDP per capita.
+
+``` {r plot model predictions}
+#| echo: false
+#| warning: false 
+
+world_gdp_predict <- log_world_gdp |>
+  mutate(predicted_lifeExp = predict(lm_model, log_world_gdp),
+         residuals = residuals(lm_model))
+
+gdp_plot <- ggplot(world_gdp_predict, aes(x = log_gdp, y = lifeExp, color = continent)) +
+  geom_point() +
+  geom_smooth(method = "lm", color = "black", linetype = "dashed", se = TRUE) +
+  theme_light() +
+  labs(x = "Log(GDP Per Capita)", y = "Life Expectancy (Years)",
+       title = "Relationship between Life Expectancy and Log GDP per Capita",
+       color = "Continent")
+
+gdp_plot
+```
+
+# 3. Visualize Model Residuals
+The spatial distribution of model residuals is plotted below. The figure suggests that the model struggles to accurately predict the life expectancy for a few countries, especially on the African continent.
+
+```{r model residuals}
+#| echo: false 
+
+residuals_plot <- ggplot() +
+  geom_sf(data = world_gdp_predict, aes(fill = residuals)) +
+  scale_fill_viridis_c(name = "Residuals (Years)") +
+  labs(title = "Model Residuals")
+
+residuals_plot
+```
+
+
