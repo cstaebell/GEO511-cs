@@ -1,0 +1,183 @@
+---
+title: "cs09: Weather Impacts on Buffalo Traffic"
+subtitle: "Using Open Data APIs"
+format: html
+---
+
+## Introduction
+
+In this case study, we investigated how **daily weather conditions** (snowfall, rainfall, temperature) influence **traffic incidents** in Buffalo, NY.  
+
+
+## Data Sources
+ 
+ 1. **Weather Data** – NOAA’s *Climate Data Online (CDO)* API  
+    - Provides daily temperature, rainfall, and snowfall from local weather stations.  
+ 
+ 2. **Traffic Incident Data** – City of Buffalo’s Open Data Portal  
+    - Contains daily reports of 911 and 311 calls, including traffic incidents.  
+
+```{r setup}
+#| echo: false
+#| warning: false
+#| message: false
+
+library(httr)
+library(jsonlite)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(ggplot2)
+
+# ==== USER SETTINGS ====
+source("secrets.R")
+lat <- 42.8864
+lon <- -78.8784
+start_date <- "2024-10-01" 
+end_date   <- "2025-03-31"
+
+# ==== API CALL ====
+data_url <- "https://www.ncei.noaa.gov/cdo-web/api/v2/data"
+params <- list(
+  datasetid = "GHCND",
+  stationid = "GHCND:USW00014733",   # Buffalo Airport
+  startdate = start_date,
+  enddate = end_date,
+  datatypeid = "TMIN,PRCP,SNOW",
+  units = "metric",
+  limit = 1000
+)
+
+response <- GET(data_url, add_headers(token = cdo_token), query = params)
+```
+
+### NOAA weather data
+```{r process data}
+#| echo: false
+#| message: false
+json_body <- content(response, "text")
+parsed_data <- fromJSON(json_body)
+
+tidy_noaa <- parsed_data[[2]] |>
+  mutate(date = as_date(date)) |>
+  select(-station, -attributes) |>
+  pivot_wider(names_from = datatype, values_from = value, values_fill = 0)
+
+buff_weather <- ggplot(tidy_noaa) +
+  geom_line(aes(x = date, y = SNOW), linetype = "dashed", color = "darkgreen") +
+  geom_line(aes(x = date, y = TMIN), linewidth = 0.75, color = "cornflowerblue") +
+  theme_light() +
+  labs(x = "Date",
+       y = "Temperature (degC) / Snow (mm)",
+       title = "Daily Minimum Temperature and Snowfall (Buffalo Airport)")
+
+buff_weather
+```
+### Buffalo Traffic Data
+
+```{r traffic data}
+#| echo: false
+#| message: false
+
+open_data_endpoint <- "https://data.buffalony.gov/resource/6at3-hpb5.json"
+
+open_data_params <- list("$where" = "report_date >= '2024-10-01' AND report_date <= '2025-03-31'", "$limit" = 5000)
+
+open_data_response <- GET(open_data_endpoint, query = open_data_params)
+
+# Process traffic data
+od_json_body <- content(open_data_response, "text")
+parsed_od <- fromJSON(od_json_body)
+
+traffic <- as_tibble(parsed_od)
+
+traffic_summarized <- traffic |>
+  mutate(date = as_date(report_date)) |>
+  group_by(date) |>
+  summarize(total_reports = n())
+
+# Plot traffic data
+traffic_plot <- ggplot(traffic_summarized) +
+  geom_line(aes(x = date, y = total_reports), color = "darkred") + 
+  theme_light() +
+  labs(x = "Date", y = "Count", title = "Daily Traffic Accidents in Buffalo")
+
+traffic_plot
+```
+### Combined Weather and Traffic Data
+
+```{r merged data}
+#| echo: false
+#| warning: false
+# Merge weather and traffic data
+combo_data <- tidy_noaa |>
+  left_join(traffic_summarized, by = "date") |>
+  replace_na(list(total_reports = 0)) |>
+  mutate(weekday = wday(date, label = TRUE)) |>
+  mutate(weekday = factor(weekday, ordered = FALSE))
+
+# Plot accident counts and snow depth over time
+acc_snow_plot <- ggplot(combo_data) +
+  geom_line(aes(x = date, y = SNOW), linetype = "dashed", color = "darkgreen") +
+  geom_line(aes(x = date, y = total_reports), alpha = 0.7, color = "red") +
+  theme_light() +
+  labs(x = "Date", y = "Accident Count / Snow (mm)", 
+       title = "Accidents and Snowfall Over Time")
+
+acc_snow_plot
+
+# Visual exploration of accidents vs. weather
+# Boxplot: accidents by day of week
+ggplot(combo_data) +
+  geom_boxplot(aes(x = weekday, y = total_reports)) +
+  labs(x = "Day of Week", y = "Accident Count", 
+       title = "Accidents by Day of the Week") +
+  theme_light() +
+  theme(panel.border = element_blank())
+
+# Boxplot: accidents by snowfall
+ggplot(combo_data) +
+  geom_boxplot(aes(x = cut(SNOW, breaks = c(-1, 10, 50, 100, 150, 500)), 
+                   y = total_reports)) +
+  labs(x = "Snowfall Range (mm)", y = "Accident Count", 
+       title = "Accidents by Snowfall") +
+  theme_light() +
+  theme(panel.border = element_blank())
+
+# Scatterplots with smooth line:
+# Accidents and snow
+ggplot(combo_data) +
+  geom_point(aes(x = SNOW, y = total_reports, color = weekday)) +
+  geom_smooth(aes(x = SNOW, y = total_reports), method = "loess", color = "orange") +
+  scale_x_continuous(trans = "log1p") + 
+  theme_light() +
+  labs(x = "Snow (mm)", y = "Accident Count", color = "Day of the Week", 
+       title = "Accidents vs. Snowfall")
+
+# Accidents and rain
+ggplot(combo_data) +
+  geom_point(aes(x = PRCP, y = total_reports), color = "darkgreen", alpha = 0.5) +
+  geom_smooth(aes(x = PRCP, y = total_reports), method = "lm", color = "orange") +
+  theme_light() +
+  labs(x = "Rain (mm)", y = "Accident Count", title = "Accidents vs. Rainfall")
+
+
+```
+
+### Fit a Linear Model
+Predict traffic reports as a function of snow, rain, and day of the week.
+``` {r lm}
+#| echo: false
+buf_lm <- lm(total_reports ~ SNOW + PRCP + weekday, data = combo_data)
+tidy_lm <- broom::tidy(buf_lm)  
+knitr::kable(tidy_lm)
+```
+
+## Reflection and Discussion
+Rain seems to have a stronger effect than snow. 
+Human behavior and traffic patterns may also explain accident variability.
+
+Spatial data like road locations could help reveal any spatial patterns in the data, such as if certain locations are more prone to accidents, and if weather is a factor at those locations.
+
+Poisson regression may be appropriate, since we are working with non-negative count data. Independence may be an issue for both linear regression and Poisson, since a disabled vehicle on the road from one accident may make additional accidents more likely. The irregularity of weather patterns may also pose a problem for the underlying Poisson assumption of constant rate. 
+
