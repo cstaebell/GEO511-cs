@@ -79,7 +79,9 @@ ggplot() +
                        mid = "grey",
                        high = "red",
                        midpoint = (max(values(monthly_lst), na.rm = TRUE) 
-                                   + min(values(monthly_lst), na.rm = TRUE))/2)
+                                   + min(values(monthly_lst), na.rm = TRUE))/2) +
+  theme(axis.text.x = element_blank(),
+        axis.text.y = element_blank())
 
 # Part 3: Compare LST by Land Cover Type
   # Explore how LST differs between Urban & built-up and Deciduous Broadleaf Forest areas.
