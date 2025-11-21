@@ -1,0 +1,299 @@
+---
+title: "cs12: Daily Temperature Dashboard"
+format: 
+  dashboard:
+    scrolling: false
+execute: 
+  cache: true
+---
+
+``` {r setup}
+#| echo: false
+#| message: false
+#| warning: false
+
+library(openmeteo)
+library(dplyr)
+library(lubridate)
+library(xts)
+library(dygraphs)
+library(ggplot2)
+library(tidyr)
+library(zoo)
+library(plotly)
+library(scales)
+library(leaflet)
+
+############################################################
+# 1. Set location & time window
+############################################################
+lat <- 43.009
+lon <- -78.785
+
+# Analyze the last ~30 years of daily weather
+year_start <- year(today()) - 100
+year_start <- 1940
+
+```
+
+```{r download data}
+#| echo: false
+#| message: false
+#| warning: false
+############################################################
+# 2. Download historical weather data
+############################################################
+weather_data <- weather_history(
+  location = c(lat, lon),
+  start = paste0(year_start, "-01-01"),
+  end   = today(),
+  daily = list("temperature_2m_max", "temperature_2m_min")
+) %>%
+  mutate(
+    # Daily mean temp
+    daily_temp_mean = (daily_temperature_2m_max + daily_temperature_2m_min) / 2,
+
+    # Rolling (30-day) climatological means for smoother historical comparison
+    rollmean_temperature_mean = rollmean(daily_temp_mean, k = 30, fill = NA, align = "center"),
+    rollmean_temperature_min  = rollmean(daily_temperature_2m_min, k = 30, fill = NA, align = "center"),
+    rollmean_temperature_max  = rollmean(daily_temperature_2m_max, k = 30, fill = NA, align = "center"),
+
+    # Extract date components for grouping
+    year  = year(date),
+    month = month(date),
+    day   = day(date)
+  )
+```
+
+```{r clean and analyze weather data}
+#| echo: false
+#| message: false
+#| warning: false
+# Compute annual mean temperature
+annual_means <- weather_data %>%
+  group_by(year) %>%
+  summarize(
+    annual_mean_temp = mean(daily_temp_mean, na.rm = TRUE)
+  )
+
+############################################################
+# 3. Filter current year & today's date
+############################################################
+weather_this_year <- weather_data %>% filter(year == year(today()))
+today_md <- format(today(), "%m-%d")
+
+today_temp <- weather_this_year %>%
+  filter(format(date, "%m-%d") == today_md) %>%
+  pull(daily_temp_mean)
+
+if (length(today_temp) == 0) today_temp <- NA
+
+############################################################
+# 4. Long-term historical mean for today's date
+############################################################
+long_term_mean_today <- weather_data %>%
+  filter(format(date, "%m-%d") == today_md,
+         year != year(today())) %>%
+  summarize(avg = mean(daily_temp_mean, na.rm = TRUE)) %>%
+  pull(avg)
+
+temp_anomaly <- today_temp - long_term_mean_today
+
+
+
+############################################################
+# 5. ECDF percentile (What % of years had temps below today?)
+############################################################
+historical_temp_today <- weather_data %>%
+  filter(format(date, "%m-%d") == today_md,
+         year != year(today())) %>%
+  pull(daily_temp_mean)
+
+# Empirical CDF
+ecdf_fun <- ecdf(historical_temp_today)
+ecdf_percentile <- percent(ecdf_fun(today_temp))
+
+
+############################################################
+# 6. Prepare time-series for dygraphs plot
+############################################################
+# Historical climatology for each calendar day
+weather_hist <- weather_data %>%
+  filter(year != year(today())) %>%
+  group_by(month, day) %>%
+  summarize(
+    temp_mean_avg = mean(rollmean_temperature_mean, na.rm=TRUE),
+    temp_max_avg  = mean(rollmean_temperature_max,  na.rm=TRUE),
+    temp_min_avg  = mean(rollmean_temperature_min,  na.rm=TRUE)
+  ) %>%
+  mutate(
+    # Re-map historical climatology onto the current year for easy comparison
+    date = as.Date(
+      paste0(
+        year(today()), "-",
+        sprintf("%02d", month), "-",
+        sprintf("%02d", day)
+      )
+    )
+  ) %>%
+  ungroup() %>%
+  select(-month, -day)
+
+weather_plot <- weather_this_year %>%
+  select(date, daily_temperature_2m_min, daily_temp_mean, daily_temperature_2m_max) %>%
+  full_join(weather_hist, by="date") %>%
+  filter(!is.na(date))
+
+ts_temp <- weather_plot %>%
+  select(-date) %>%
+  xts(order.by = weather_plot$date)
+```
+
+```{r create leaflet map}
+#| echo: false
+
+# Leaflet Map
+
+p_map <- leaflet() |>
+  addTiles() |>
+  addCircleMarkers(
+    lng = lon,
+    lat = lat,
+    radius = 8,
+    color = "red",
+    fillOpacity = 0.8,
+    popup = paste("Site Location<br>Lat:", lat, "<br>Lon:", lon)
+  ) |>
+  setView(lng = lon, lat = lat, zoom = 5)
+
+```
+
+
+```{r temperature plots}
+################################
+# daily temperature heatmap plot
+
+p_heatmap <- ggplot(weather_data,
+                 aes(y=as.Date(sprintf("2025-%02d-%02d", month(date), day(date))),
+                     x=year,fill=daily_temp_mean,
+                     text = paste0("Date: ", date, "<br>","Year: ",
+                                   year, "<br>","Mean Temp: ", round(daily_temp_mean, 1), " °C"))) +
+  geom_raster() +
+    scale_fill_viridis_c(option = "magma",name="Temp\n(°C)")+
+  theme_minimal() +
+    labs(
+    title = "Daily Mean Temperature Over Years",
+    subtitle = paste0("Red line = Today (", round(today_temp,1),"°C)"),
+    x = "Day of Year",
+    y = "Year"
+  )+
+   scale_y_date(
+    date_labels = "%b",     # Show month abbreviation only
+    date_breaks = "1 month"
+  )
+
+###############################
+# mean annual temperature plot
+p_annual <- ggplot(annual_means, aes(
+  y = annual_mean_temp,
+  x = as.Date(paste0(year, "-07-01")), #place point mid-year
+  text = paste0("Year: ",year, "<br>","Mean Temp: ",
+                                     round(annual_mean_temp, 1), " °C"),
+  group=1)) +
+  
+  # Optionally connect the annual means as a curve
+  geom_smooth(
+    method = "loess",
+    se = TRUE,
+    color = "grey40",
+    fill= "grey40",
+    linewidth = 0.1,
+    span = 0.6
+  ) +
+  #  Thick smoothed line (mean annual temperature)
+  geom_line(
+    color = "blue",
+    linewidth = 0.5
+  ) +
+  labs(
+    title = "Mean Annual Temperature (°C)",
+    subtitle = paste0(year_start, " - ", year(today())),
+    x = "Date",
+    y = ""
+  ) +
+  theme_minimal()
+```
+
+## Row 1: Map {height=15%}
+```{r}
+p_map
+```
+
+## Row 2: Value boxes {height=20%}
+```{r}
+#| content: valuebox
+#| title: "Today's Mean Temperature (°C)"
+list(
+  icon = "thermometer-half",
+  color = "primary",
+  value = round(today_temp, 1)
+)
+```
+
+```{r}
+#| content: valuebox
+#| title: "Long Term Mean for This Day (°C)"
+list(
+  icon = "calendar-date-fill",
+  color = "warning",
+  value = round(long_term_mean_today, 1)
+)
+```
+
+```{r}
+#| content: valuebox
+#| title: "Temperature Anomaly (°C)"
+list(
+  icon = "plus-slash-minus",
+  color = "secondary",
+  value = round(temp_anomaly, 1)
+)
+```
+
+```{r}
+#| content: valuebox
+#| title: "Percentile Rank vs History"
+list(
+  icon = "graph-up-arrow",
+  color = "success",
+  value = ecdf_percentile
+)
+
+```
+
+
+## Row 3: Dygraph {height=30%}
+```{r}
+#| echo: false
+#| title: "Daily Temperature: This Year vs. Historical Climate Normals"
+
+dy1 <- dygraph(ts_temp) |>
+  dySeries(c("temp_max_avg", "temp_mean_avg", "temp_min_avg"), 
+           label = "Historical Avg") |>
+  dySeries(c("daily_temperature_2m_max", "daily_temp_mean", "daily_temperature_2m_min"), 
+           label = "This Year") |>
+  dyAxis("y", label = "Temperature (°C)") |>
+  dyRangeSelector(dateWindow = c("2025-01-01", "2025-12-31"))
+
+dy1
+```
+
+## Row 4: Mean Temperature Plots {height=35%}
+```{r}
+ggplotly(p_heatmap, tooltip = "text")
+
+```
+
+```{r}
+ggplotly(p_annual, tooltip = "text")
+```
