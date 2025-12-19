@@ -1,0 +1,75 @@
+---
+title: "Parallel Computing with R"
+subtitle: Census Dots Visualization
+execute: 
+  cache: false
+format: html
+---
+
+```{r load libraries, echo=F, message=F, warning=F}
+library(tidyverse)
+library(sf)
+library(tictoc) # for timing code if interested
+library(multidplyr) # for parallel processing of dplyr code
+library(mapview) # makes easy leaflet maps
+library(foreach) # for parallel loops
+library(doParallel)
+library(tidycensus)
+library(leaflet)
+```
+
+```{r parallel backend, echo=F, message=F, warning=F}
+# Detect the number of available cores
+num_cores <- parallel::detectCores() - 1  # leave one core free
+
+# Register the cluster for parallel processing
+registerDoParallel(num_cores)
+```
+
+
+```{r download population data, echo=F, message=F, warning=F}
+# Download block-level data on population by race in each census block in Buffalo
+race_vars <- c(
+  "White alone" = "P1_003N",
+  "Black or African American alone" = "P1_004N",
+  "American Indian and Alaska Native alone" = "P1_005N",
+  "Asian alone" = "P1_006N",
+  "Native Hawaiian and Other Pacific Islander alone" = "P1_007N",
+  "Some Other Race alone" = "P1_008N",
+  "Two or More Races" = "P1_009N"
+)
+
+options(tigris_use_cache = TRUE)
+
+# Get the data
+erie <- get_decennial(geography = "block", variables = race_vars, year=2020,
+                  state = "NY", county = "Erie County", geometry = TRUE,
+                  sumfile = "pl", cache_table=T) 
+```
+
+
+```{r generate dot map, message=F, warning=F}
+erie_crop <- st_crop(erie, c(xmin=-78.9,xmax=-78.85,ymin=42.888,ymax=42.92))
+erie_crop$variable <- as.factor(erie_crop$variable)
+
+result <- foreach(r=levels(erie_crop$variable), .combine=rbind) %do% {
+    filter(erie_crop, variable == r) %>%
+    st_sample(size = .$value) %>%
+    st_as_sf() %>%
+    mutate(new_variable = r)
+}
+
+# Visualize the results
+result <- st_transform(result, crs = "EPSG:4326")
+col_palette <- colorFactor(palette = "Set3", domain = result$new_variable)
+
+leaflet(data = result) |>
+  addProviderTiles("CartoDB.Positron") |>
+  addCircleMarkers(radius = 0.5, stroke = FALSE, fillOpacity = 0.9, 
+                   fillColor = col_palette(result$new_variable)) |>
+  addLegend(pal = col_palette, values = result$new_variable, title = "Legend",
+            position = "bottomright")
+
+```
+
+
